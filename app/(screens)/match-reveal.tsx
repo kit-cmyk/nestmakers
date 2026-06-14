@@ -86,12 +86,17 @@ export default function MatchReveal() {
     return () => heartLoopRef.current?.stop();
   }, [loadingProfile]);
 
-  if (loadingProfile || !compat) {
+  if (loadingProfile) {
     return (
       <View style={[s.root, { alignItems: 'center', justifyContent: 'center' }]}>
         <ActivityIndicator size="large" color={NM.lavender} />
       </View>
     );
+  }
+
+  if (!compat) {
+    router.back();
+    return null;
   }
 
   const mySeed = myProfile?.id?.charCodeAt(0) ?? 2;

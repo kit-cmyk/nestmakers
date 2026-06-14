@@ -45,6 +45,8 @@ export interface Profile {
   notif_email_weekly_digest: boolean;
   notif_email_safety_alerts: boolean;
   journeys_completed: number;
+  latitude: number | null;
+  longitude: number | null;
   created_at: string;
   updated_at: string;
 }

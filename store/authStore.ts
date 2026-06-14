@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { Session } from '@supabase/supabase-js';
+import * as WebBrowser from 'expo-web-browser';
 import { supabase } from '@/lib/supabase';
 import { Profile } from '@/types/database';
 
@@ -12,6 +13,7 @@ interface AuthState {
   setProfile: (profile: Profile | null) => void;
   signIn: (email: string, password: string) => Promise<string | null>;
   signUp: (email: string, password: string) => Promise<string | null>;
+  signInWithGoogle: () => Promise<string | null>;
   signOut: () => Promise<void>;
   loadProfile: () => Promise<void>;
   updatePushToken: (token: string) => Promise<void>;
@@ -52,6 +54,40 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (data.session) set({ session: data.session });
       if (data.user) {
         await supabase.from('profiles').insert({ id: data.user.id, email });
+      }
+      return null;
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  signInWithGoogle: async () => {
+    set({ isLoading: true });
+    try {
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: 'nestmakers://', skipBrowserRedirect: true },
+      });
+      if (error || !data.url) return error?.message ?? 'Could not start Google sign-in';
+
+      const result = await WebBrowser.openAuthSessionAsync(data.url, 'nestmakers://');
+      if (result.type !== 'success') return null; // user cancelled
+
+      const codeMatch = result.url.match(/[?&]code=([^&#]+)/);
+      const code = codeMatch?.[1];
+      if (!code) return 'Google sign-in did not return an auth code';
+
+      const { data: sessionData, error: codeError } = await supabase.auth.exchangeCodeForSession(code);
+      if (codeError) return codeError.message;
+
+      if (sessionData?.session) {
+        set({ session: sessionData.session });
+        const { id: userId, email: userEmail } = sessionData.session.user;
+        const { data: existing } = await supabase.from('profiles').select('id').eq('id', userId).single();
+        if (!existing) {
+          await supabase.from('profiles').insert({ id: userId, email: userEmail ?? '' });
+        }
+        await get().loadProfile();
       }
       return null;
     } finally {

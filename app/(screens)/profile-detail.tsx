@@ -14,6 +14,7 @@ import LikeablePrompt from '@/components/LikeablePrompt';
 import { supabase } from '@/lib/supabase';
 import { PUBLIC_PROFILE_SELECT, asPublicProfile } from '@/lib/publicProfiles';
 import { PublicProfile, INVOLVEMENT_LABELS, INSEM_LABELS } from '@/types/database';
+import { useAuthStore } from '@/store/authStore';
 
 const { width } = Dimensions.get('window');
 
@@ -32,14 +33,21 @@ function getAge(dob: string | null): number | null {
 export default function ProfileDetail() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { id, preview } = useLocalSearchParams<{ id: string; preview?: string }>();
+  const { id, preview, threadId: threadIdParam } = useLocalSearchParams<{ id: string; preview?: string; threadId?: string }>();
   const isPreview = preview === 'true';
+  const { profile: ownProfile } = useAuthStore();
   const [profile, setProfile] = useState<PublicProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [likedPrompts, setLikedPrompts] = React.useState<Set<string>>(new Set());
+  const [matchThreadId, setMatchThreadId] = React.useState<string | null>(threadIdParam ?? null);
 
   useEffect(() => {
     if (!id) { setLoading(false); return; }
+    if (isPreview) {
+      setProfile(ownProfile as unknown as PublicProfile | null);
+      setLoading(false);
+      return;
+    }
     supabase
       .from('public_profiles')
       .select(PUBLIC_PROFILE_SELECT)
@@ -50,9 +58,23 @@ export default function ProfileDetail() {
         setProfile(asPublicProfile(data));
         setLoading(false);
       });
-    // Record view for ranking signals (fire-and-forget, skip on own preview)
-    if (!isPreview) supabase.rpc('record_profile_view', { p_viewed_id: id });
-  }, [id, isPreview]);
+    supabase.rpc('record_profile_view', { p_viewed_id: id });
+  }, [id, isPreview, ownProfile]);
+
+  useEffect(() => {
+    if (!id || isPreview || !ownProfile?.id) return;
+    const uid = ownProfile.id;
+    supabase
+      .from('matches')
+      .select('threads(id)')
+      .or(`and(user1_id.eq.${uid},user2_id.eq.${id}),and(user1_id.eq.${id},user2_id.eq.${uid})`)
+      .maybeSingle()
+      .then(({ data }) => {
+        const t = (data as any)?.threads;
+        const threadId = Array.isArray(t) ? t[0]?.id : t?.id;
+        if (threadId) setMatchThreadId(threadId);
+      });
+  }, [id, isPreview, ownProfile?.id]);
 
   if (loading) {
     return (
@@ -195,14 +217,23 @@ export default function ProfileDetail() {
           <TouchableOpacity style={s.actionCircle} onPress={() => router.back()}>
             <Ionicons name="close" size={18} color={NM.ink2} />
           </TouchableOpacity>
-          <NMBtn
-            style={{ flex: 1 }}
-            onPress={() => router.push({ pathname: '/(screens)/like-compose', params: { otherId: profile?.id } })}
-          >
-            {(profile?.bio || (profile?.prompts ?? []).length > 0)
-              ? 'Like a specific moment'
-              : 'Like this profile'}
-          </NMBtn>
+          {matchThreadId ? (
+            <NMBtn
+              style={{ flex: 1 }}
+              onPress={() => router.push({ pathname: '/(screens)/chat', params: { threadId: matchThreadId, otherId: profile.id } })}
+            >
+              Message
+            </NMBtn>
+          ) : (
+            <NMBtn
+              style={{ flex: 1 }}
+              onPress={() => router.push({ pathname: '/(screens)/like-compose', params: { otherId: profile?.id } })}
+            >
+              {(profile?.bio || (profile?.prompts ?? []).length > 0)
+                ? 'Like a specific moment'
+                : 'Like this profile'}
+            </NMBtn>
+          )}
         </View>
       )}
     </View>

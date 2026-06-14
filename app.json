@@ -24,8 +24,7 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "app.nestmakers",
-      "googleServicesFile": "./google-services.json"
+      "package": "app.nestmakers"
     },
     "web": {
       "bundler": "metro",
@@ -44,7 +43,13 @@
       ],
       "expo-secure-store",
       "expo-font",
-      "@react-native-firebase/app"
+      "expo-web-browser",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Nestmakers uses your location to show you profiles nearby."
+        }
+      ]
     ],
     "extra": {
       "router": {},

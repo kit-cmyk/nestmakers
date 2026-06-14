@@ -32,6 +32,13 @@ yarn-error.*
 
 # local env files
 .env*.local
+.env
+
+# sensitive native config
+google-services.json
+
+# docs / binaries
+*.docx
 
 # typescript
 *.tsbuildinfo

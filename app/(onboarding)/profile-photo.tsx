@@ -11,6 +11,7 @@ import NMHeader from '@/components/NMHeader';
 import NMBtn from '@/components/NMBtn';
 import { useOnboardingStore } from '@/store/onboardingStore';
 import { useAuthStore } from '@/store/authStore';
+import { supabase } from '@/lib/supabase';
 import { uploadFileFromBase64 } from '@/lib/uploadFile';
 
 const MAX_PHOTOS = 5;
@@ -23,7 +24,7 @@ type Slot = { localUri: string; url: string | null; uploading: boolean };
 export default function ProfilePhoto() {
   const router = useRouter();
   const { saveProfile, setPhotoUrls } = useOnboardingStore();
-  const { loadProfile, session } = useAuthStore();
+  const { loadProfile } = useAuthStore();
   const [slots, setSlots] = useState<Slot[]>([]);
   const [saving, setSaving] = useState(false);
 
@@ -63,11 +64,12 @@ export default function ProfilePhoto() {
     });
 
     try {
-      const userId = session?.user?.id ?? 'unknown';
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Not authenticated');
       const ext = (mimeType ?? 'image/jpeg').split('/')[1] ?? 'jpg';
       const url = await uploadFileFromBase64(
         'profile-photos',
-        `${userId}/photo-${slotIndex}.${ext}`,
+        `${user.id}/photo-${slotIndex}.${ext}`,
         base64,
         mimeType ?? 'image/jpeg',
       );
