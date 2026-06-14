@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Animated, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Animated, ActivityIndicator, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -11,20 +11,26 @@ import { PUBLIC_PROFILE_SELECT, asPublicProfiles } from '@/lib/publicProfiles';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
 import { PublicProfile, Like } from '@/types/database';
-import { usePremium } from '@/hooks/usePremium';
-import { usePremiumSheetStore } from '@/store/premiumSheetStore';
 
 interface LikeItem {
   like: Like;
   profile: PublicProfile;
 }
 
-const FILTERS = ['All', 'Liked you', 'Matched'];
+interface SentLikeItem {
+  like: Like;
+  profile: PublicProfile;
+  isMatched: boolean;
+  threadId?: string;
+}
+
+const FILTERS = ['All', 'Liked you', 'Matched', 'Sent'];
 
 const EMPTY_MESSAGES: Record<number, { title: string; sub: string }> = {
   0: { title: 'No responses yet', sub: "When someone likes you, they'll show up here." },
   1: { title: 'No likes yet', sub: 'Keep browsing — someone will like you back soon.' },
   2: { title: 'No matches yet', sub: "When you both like each other, you'll meet here." },
+  3: { title: 'No sent likes yet', sub: "Profiles you like will appear here while you wait for a response." },
 };
 
 interface ResponseCardProps {
@@ -96,12 +102,12 @@ export default function Interest() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { session } = useAuthStore();
-  const isPremium = usePremium();
-  const showPremiumSheet = usePremiumSheetStore((s) => s.show);
   const [activeFilter, setActiveFilter] = useState(0);
   const [likes, setLikes] = useState<LikeItem[]>([]);
+  const [sentLikes, setSentLikes] = useState<SentLikeItem[]>([]);
   const [matches, setMatches] = useState<{ otherId: string; threadId: string; profile: PublicProfile }[]>([]);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const [dismissedSent, setDismissedSent] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [matchingId, setMatchingId] = useState<string | null>(null);
@@ -182,6 +188,53 @@ export default function Interest() {
     } else {
       setMatches([]);
     }
+
+    // Sent likes — likes this user has sent that haven't been passed by the recipient
+    const { data: sentRows } = await supabase
+      .from('likes')
+      .select('*')
+      .eq('from_user_id', session.user.id)
+      .is('passed_at', null)
+      .order('created_at', { ascending: false });
+
+    if (sentRows && sentRows.length > 0) {
+      const toIds = sentRows.map((l: Like) => l.to_user_id);
+      const { data: sentProfileRows } = await supabase
+        .from('public_profiles')
+        .select(PUBLIC_PROFILE_SELECT)
+        .in('id', toIds);
+
+      const { data: myMatchRows } = await supabase
+        .from('matches')
+        .select('user1_id, user2_id, threads(id)')
+        .or(`user1_id.eq.${session.user.id},user2_id.eq.${session.user.id}`);
+
+      const matchedIds = new Set(
+        (myMatchRows ?? []).flatMap((m: any) =>
+          [m.user1_id, m.user2_id].filter((id: string) => id !== session.user.id)
+        )
+      );
+
+      const threadIdByOther = new Map<string, string>(
+        (myMatchRows ?? []).map((m: any) => {
+          const otherId = m.user1_id === session.user.id ? m.user2_id : m.user1_id;
+          return [otherId, m.threads?.[0]?.id as string];
+        })
+      );
+
+      const profileMap = new Map(asPublicProfiles(sentProfileRows).map((p) => [p.id, p]));
+      const sent = sentRows
+        .map((l: Like) => {
+          const profile = profileMap.get(l.to_user_id);
+          if (!profile) return null;
+          return { like: l, profile, isMatched: matchedIds.has(l.to_user_id), threadId: threadIdByOther.get(l.to_user_id) };
+        })
+        .filter(Boolean) as SentLikeItem[];
+
+      setSentLikes(sent);
+    } else {
+      setSentLikes([]);
+    }
     } catch {
       setError('Could not load responses. Check your connection and try again.');
     } finally {
@@ -218,6 +271,15 @@ export default function Interest() {
       .eq('to_user_id', session?.user?.id ?? '');
   }, [session?.user?.id]);
 
+  const handleWithdrawLike = useCallback(async (likeId: string) => {
+    setDismissedSent((prev) => new Set([...prev, likeId]));
+    await supabase
+      .from('likes')
+      .delete()
+      .eq('id', likeId)
+      .eq('from_user_id', session?.user?.id ?? '');
+  }, [session?.user?.id]);
+
   const handleMatch = useCallback(async (item: LikeItem) => {
     if (!session?.user) return;
     setMatchingId(item.like.id);
@@ -249,14 +311,19 @@ export default function Interest() {
   }, [session, router]);
 
   const visibleLikes = likes.filter((l) => !dismissed.has(l.like.id));
-  const filtered =
-    activeFilter === 0 ? visibleLikes :
-    activeFilter === 1 ? visibleLikes :
-    []; // "Matched" tab uses the matches array below
+  // filter 0 = All, 1 = Liked you, 2 = Matched, 3 = Sent
+  const filtered = (activeFilter === 2 || activeFilter === 3) ? [] : visibleLikes;
+
+  // For the All tab, only show non-matched sent likes (matched ones appear in the Matched section)
+  const pendingSentInAll = sentLikes.filter((item) => !item.isMatched && !dismissedSent.has(item.like.id));
 
   const empty = EMPTY_MESSAGES[activeFilter];
   const showMatches = activeFilter === 2;
-  const totalCount = activeFilter === 2 ? matches.length : visibleLikes.length;
+  const showSent = activeFilter === 3;
+  const totalCount = activeFilter === 2 ? matches.length :
+                     activeFilter === 3 ? sentLikes.filter((item) => !dismissedSent.has(item.like.id)).length :
+                     activeFilter === 1 ? visibleLikes.length :
+                     visibleLikes.length + matches.length + pendingSentInAll.length;
 
   return (
     <View style={s.root}>
@@ -264,7 +331,7 @@ export default function Interest() {
         <Text style={s.headerTitle}>Responses</Text>
         <Text style={s.headerSub}>
           {loading ? 'Loading…' : totalCount > 0
-            ? `${totalCount} response${totalCount !== 1 ? 's' : ''} waiting`
+            ? `${totalCount} ${activeFilter === 3 ? `sent like${totalCount !== 1 ? 's' : ''}` : `response${totalCount !== 1 ? 's' : ''} waiting`}`
             : 'All caught up'}
         </Text>
       </View>
@@ -317,52 +384,113 @@ export default function Interest() {
                 ? (m.profile.display_name ?? 'Anonymous')
                 : (m.profile.first_name ?? 'Someone');
               return (
-                <TouchableOpacity
-                  key={m.otherId}
-                  style={s.matchCard}
-                  onPress={() =>
-                    router.push({ pathname: '/(screens)/chat', params: { threadId: m.threadId, otherId: m.otherId } })
-                  }
-                >
+                <View key={m.otherId} style={s.matchCard}>
                   <PortraitBlob seed={m.profile.id.charCodeAt(0)} size={48} />
                   <View style={{ flex: 1 }}>
                     <Text style={s.cardName}>{name}</Text>
-                    <Text style={s.cardKind}>Matched · tap to chat</Text>
+                    <Text style={s.cardKind}>Mutual match</Text>
                   </View>
-                  <Ionicons name="chevron-forward" size={16} color={NM.ink3} />
-                </TouchableOpacity>
+                  <NMBtn
+                    kind="primary"
+                    style={{ paddingHorizontal: 14, paddingVertical: 8 }}
+                    onPress={() =>
+                      router.push({ pathname: '/(screens)/chat', params: { threadId: m.threadId, otherId: m.otherId } })
+                    }
+                  >
+                    Message
+                  </NMBtn>
+                </View>
               );
             })}
           </ScrollView>
         )
-      ) : filtered.length === 0 ? (
+      ) : showSent ? (
+        sentLikes.filter((item) => !dismissedSent.has(item.like.id)).length === 0 ? (
+          <View style={s.center}>
+            <View style={s.emptyIcon}><Text style={s.emptyIconText}>✦</Text></View>
+            <Text style={s.emptyTitle}>{empty.title}</Text>
+            <Text style={s.emptySub}>{empty.sub}</Text>
+          </View>
+        ) : (
+          <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
+            {sentLikes.filter((item) => !dismissedSent.has(item.like.id)).map((item) => {
+              const name = item.profile.is_anonymous
+                ? (item.profile.display_name ?? 'Anonymous')
+                : (item.profile.first_name ?? 'Someone');
+              return (
+                <View key={item.like.id} style={s.matchCard}>
+                  <TouchableOpacity
+                    style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 }}
+                    onPress={() => router.push({
+                      pathname: '/(screens)/profile-detail',
+                      params: {
+                        id: item.profile.id,
+                        ...(item.isMatched && item.threadId ? { threadId: item.threadId } : {}),
+                      },
+                    })}
+                  >
+                    <PortraitBlob seed={item.profile.id.charCodeAt(0)} size={48} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.cardName}>{name}</Text>
+                      {item.like.note ? (
+                        <Text style={s.cardKind} numberOfLines={1}>"{item.like.note}"</Text>
+                      ) : item.like.prompt_kicker ? (
+                        <Text style={s.cardKind} numberOfLines={1}>Liked a prompt</Text>
+                      ) : (
+                        <Text style={s.cardKind}>Liked their profile</Text>
+                      )}
+                    </View>
+                    {!item.isMatched && <NMBadge tone="butter">Awaiting</NMBadge>}
+                  </TouchableOpacity>
+                  {item.isMatched && (
+                    <NMBtn
+                      kind="primary"
+                      style={{ paddingHorizontal: 14, paddingVertical: 8 }}
+                      onPress={() => {
+                        const threadId = item.threadId ?? matches.find((m) => m.otherId === item.profile.id)?.threadId ?? '';
+                        router.push({ pathname: '/(screens)/chat', params: { threadId, otherId: item.profile.id } });
+                      }}
+                    >
+                      Message
+                    </NMBtn>
+                  )}
+                  {!item.isMatched && (
+                    <TouchableOpacity
+                      style={s.withdrawBtn}
+                      onPress={() =>
+                        Alert.alert(
+                          'Withdraw like?',
+                          `This will remove your like from ${name}'s profile.`,
+                          [
+                            { text: 'Cancel', style: 'cancel' },
+                            { text: 'Withdraw', style: 'destructive', onPress: () => handleWithdrawLike(item.like.id) },
+                          ]
+                        )
+                      }
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <Ionicons name="close" size={16} color={NM.ink3} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              );
+            })}
+          </ScrollView>
+        )
+      ) : (activeFilter === 0 ? (filtered.length === 0 && matches.length === 0 && pendingSentInAll.length === 0) : filtered.length === 0) ? (
         <View style={s.center}>
           <View style={s.emptyIcon}><Text style={s.emptyIconText}>✦</Text></View>
           <Text style={s.emptyTitle}>{empty.title}</Text>
           <Text style={s.emptySub}>{empty.sub}</Text>
         </View>
-      ) : !isPremium ? (
-        <View style={s.center}>
-          <View style={s.lockedIconWrap}>
-            <Text style={s.lockedCount}>{filtered.length}</Text>
-            <Ionicons name="lock-closed" size={16} color={NM.lavenderDeep} style={s.lockedIcon} />
-          </View>
-          <Text style={s.emptyTitle}>
-            {filtered.length} {filtered.length === 1 ? 'person' : 'people'} liked you
-          </Text>
-          <Text style={s.emptySub}>
-            Upgrade to see who they are and choose to match.
-          </Text>
-          <TouchableOpacity
-            style={s.upgradeBtn}
-            onPress={() => showPremiumSheet('See who liked you — upgrade to reveal.')}
-          >
-            <Ionicons name="arrow-up-circle-outline" size={16} color="#fff" />
-            <Text style={s.upgradeBtnText}>Reveal who liked you</Text>
-          </TouchableOpacity>
-        </View>
       ) : (
         <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
+          {/* Liked you section */}
+          {activeFilter === 0 && filtered.length > 0 && (
+            <View style={s.sectionDivider}>
+              <Text style={s.sectionDividerText}>Liked you</Text>
+            </View>
+          )}
           {filtered.map((item) => (
             <ResponseCard
               key={item.like.id}
@@ -372,6 +500,87 @@ export default function Interest() {
               matching={matchingId === item.like.id}
             />
           ))}
+          {/* Matched section (All tab) */}
+          {activeFilter === 0 && matches.length > 0 && (
+            <>
+              <View style={s.sectionDivider}>
+                <Text style={s.sectionDividerText}>Matched</Text>
+              </View>
+              {matches.map((m) => {
+                const name = m.profile.is_anonymous
+                  ? (m.profile.display_name ?? 'Anonymous')
+                  : (m.profile.first_name ?? 'Someone');
+                return (
+                  <View key={m.otherId} style={s.matchCard}>
+                    <PortraitBlob seed={m.profile.id.charCodeAt(0)} size={48} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.cardName}>{name}</Text>
+                      <Text style={s.cardKind}>Mutual match</Text>
+                    </View>
+                    <NMBtn
+                      kind="primary"
+                      style={{ paddingHorizontal: 14, paddingVertical: 8 }}
+                      onPress={() =>
+                        router.push({ pathname: '/(screens)/chat', params: { threadId: m.threadId, otherId: m.otherId } })
+                      }
+                    >
+                      Message
+                    </NMBtn>
+                  </View>
+                );
+              })}
+            </>
+          )}
+          {/* Sent section (All tab) */}
+          {activeFilter === 0 && pendingSentInAll.length > 0 && (
+            <>
+              <View style={s.sectionDivider}>
+                <Text style={s.sectionDividerText}>Sent</Text>
+              </View>
+              {pendingSentInAll.map((item) => {
+                const name = item.profile.is_anonymous
+                  ? (item.profile.display_name ?? 'Anonymous')
+                  : (item.profile.first_name ?? 'Someone');
+                return (
+                  <View key={item.like.id} style={s.matchCard}>
+                    <TouchableOpacity
+                      style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 }}
+                      onPress={() => router.push({ pathname: '/(screens)/profile-detail', params: { id: item.profile.id } })}
+                    >
+                      <PortraitBlob seed={item.profile.id.charCodeAt(0)} size={48} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={s.cardName}>{name}</Text>
+                        {item.like.note ? (
+                          <Text style={s.cardKind} numberOfLines={1}>"{item.like.note}"</Text>
+                        ) : item.like.prompt_kicker ? (
+                          <Text style={s.cardKind} numberOfLines={1}>Liked a prompt</Text>
+                        ) : (
+                          <Text style={s.cardKind}>Liked their profile</Text>
+                        )}
+                      </View>
+                      <NMBadge tone="butter">Awaiting</NMBadge>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={s.withdrawBtn}
+                      onPress={() =>
+                        Alert.alert(
+                          'Withdraw like?',
+                          `This will remove your like from ${name}'s profile.`,
+                          [
+                            { text: 'Cancel', style: 'cancel' },
+                            { text: 'Withdraw', style: 'destructive', onPress: () => handleWithdrawLike(item.like.id) },
+                          ]
+                        )
+                      }
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <Ionicons name="close" size={16} color={NM.ink3} />
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
+            </>
+          )}
         </ScrollView>
       )}
     </View>
@@ -418,18 +627,19 @@ const s = StyleSheet.create({
     backgroundColor: '#fff', borderRadius: NM.r.xl, padding: 14, marginBottom: 10,
     ...NM.shadow.soft, flexDirection: 'row', alignItems: 'center', gap: 12,
   },
-  lockedIconWrap: {
-    width: 72, height: 72, borderRadius: 36,
-    backgroundColor: NM.lavenderSoft,
+  sectionDivider: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    marginVertical: 12,
+  },
+  sectionDividerText: {
+    fontSize: 10, color: NM.ink3, letterSpacing: 1.2,
+    textTransform: 'uppercase', fontWeight: '600',
+  },
+  withdrawBtn: {
+    marginLeft: 8, padding: 4,
+    borderRadius: NM.r.pill,
+    backgroundColor: NM.hair,
     alignItems: 'center', justifyContent: 'center',
-    marginBottom: 4, position: 'relative',
+    width: 28, height: 28,
   },
-  lockedCount: { fontSize: 28, fontWeight: '700', color: NM.lavenderDeep },
-  lockedIcon: { position: 'absolute', bottom: 6, right: 6 },
-  upgradeBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: NM.lavenderDeep, paddingHorizontal: 20, paddingVertical: 12,
-    borderRadius: NM.r.pill, marginTop: 8,
-  },
-  upgradeBtnText: { fontSize: 14, color: '#fff', fontWeight: '600' },
 });

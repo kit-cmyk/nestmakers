@@ -9,10 +9,6 @@ import { NM } from '@/constants/tokens';
 import NMBtn from '@/components/NMBtn';
 import { useDealBreakersStore } from '@/store/dealBreakersStore';
 import { InsemPref, InvolvementLevel } from '@/types/database';
-import { usePremium } from '@/hooks/usePremium';
-import { usePremiumSheetStore } from '@/store/premiumSheetStore';
-
-const FREE_RULE_LIMIT = 1;
 
 const INSEM_OPTIONS: { key: InsemPref; label: string }[] = [
   { key: 'ai', label: 'AI only' },
@@ -61,17 +57,6 @@ export default function DealBreakers() {
   const insets = useSafeAreaInsets();
   const store = useDealBreakersStore();
   const activeCount = store.activeCount();
-  const isPremium = usePremium();
-  const showPremiumSheet = usePremiumSheetStore((s) => s.show);
-
-  const guardRule = (isAdding: boolean) => {
-    if (isAdding && !isPremium && activeCount >= FREE_RULE_LIMIT) {
-      showPremiumSheet('Upgrade to set unlimited deal-breaker rules.');
-      return false;
-    }
-    return true;
-  };
-
   return (
     <View style={[s.root, { paddingTop: insets.top }]}>
       <View style={s.header}>
@@ -97,8 +82,6 @@ export default function DealBreakers() {
           options={INSEM_OPTIONS}
           selected={store.blockedInsemPrefs}
           onToggle={(key) => {
-            const isAdding = !store.blockedInsemPrefs.includes(key);
-            if (!guardRule(isAdding)) return;
             store.set({ blockedInsemPrefs: toggle(store.blockedInsemPrefs, key) });
           }}
         />
@@ -109,8 +92,6 @@ export default function DealBreakers() {
           options={INVOLVEMENT_OPTIONS}
           selected={store.blockedInvolvementLevels}
           onToggle={(key) => {
-            const isAdding = !store.blockedInvolvementLevels.includes(key);
-            if (!guardRule(isAdding)) return;
             store.set({ blockedInvolvementLevels: toggle(store.blockedInvolvementLevels, key) });
           }}
         />
@@ -124,7 +105,6 @@ export default function DealBreakers() {
           <Switch
             value={store.requireAge21}
             onValueChange={(v) => {
-              if (!guardRule(v)) return;
               store.set({ requireAge21: v });
             }}
             trackColor={{ false: NM.hair2, true: NM.ink }}
@@ -141,7 +121,6 @@ export default function DealBreakers() {
           <Switch
             value={store.sameCountryOnly}
             onValueChange={(v) => {
-              if (!guardRule(v)) return;
               store.set({ sameCountryOnly: v });
             }}
             trackColor={{ false: NM.hair2, true: NM.ink }}

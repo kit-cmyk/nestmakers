@@ -1,13 +1,16 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
-  View, Text, ScrollView, TouchableOpacity, StyleSheet, Switch,
+  View, Text, ScrollView, TouchableOpacity, StyleSheet, Switch, ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as Location from 'expo-location';
 import { NM } from '@/constants/tokens';
 import NMBtn from '@/components/NMBtn';
 import { useBrowseFiltersStore } from '@/store/browseFiltersStore';
+import { useAuthStore } from '@/store/authStore';
+import { supabase } from '@/lib/supabase';
 import { GiverType, InsemPref, InvolvementLevel } from '@/types/database';
 
 function ChipGroup<T extends string>({ options, selected, onChange }: {
@@ -59,13 +62,51 @@ const INVOLVEMENT: { key: InvolvementLevel; label: string }[] = [
   { key: 'co_parenting', label: 'Co-parenting' },
 ];
 
+const RADIUS_OPTIONS = [25, 50, 100, 250, 500];
+
 export default function BrowseFilters() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { giverTypes, insemPrefs, involvementLevels, ageMin, ageMax, verifiedOnly, setFilters, reset, activeCount } =
+  const { giverTypes, insemPrefs, involvementLevels, ageMin, ageMax, verifiedOnly, radiusKm, setFilters, reset, activeCount } =
     useBrowseFiltersStore();
+  const { session, profile: myProfile, setProfile } = useAuthStore();
+
+  const [locationLoading, setLocationLoading] = useState(false);
+  const [locationError, setLocationError] = useState<string | null>(null);
 
   const count = activeCount();
+  const hasLocation = !!(myProfile?.latitude && myProfile?.longitude);
+
+  const handleSetLocation = async () => {
+    setLocationLoading(true);
+    setLocationError(null);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        setLocationError('Location permission denied. Enable it in Settings to use this filter.');
+        return;
+      }
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const { latitude, longitude } = loc.coords;
+
+      if (!session?.user) return;
+      const { error } = await supabase
+        .from('profiles')
+        .update({ latitude, longitude })
+        .eq('id', session.user.id);
+
+      if (error) {
+        setLocationError('Could not save your location. Try again.');
+        return;
+      }
+
+      if (myProfile) setProfile({ ...myProfile, latitude, longitude });
+    } catch {
+      setLocationError('Could not get your location. Try again.');
+    } finally {
+      setLocationLoading(false);
+    }
+  };
 
   return (
     <View style={[s.root, { paddingTop: insets.top }]}>
@@ -150,6 +191,63 @@ export default function BrowseFilters() {
           />
         </View>
 
+        <Text style={[s.sectionLabel, { marginTop: 24 }]}>Location</Text>
+        <View style={s.locationCard}>
+          <TouchableOpacity
+            style={s.locationBtn}
+            onPress={handleSetLocation}
+            disabled={locationLoading}
+            activeOpacity={0.75}
+          >
+            {locationLoading
+              ? <ActivityIndicator size="small" color={NM.lavenderDeep} />
+              : <Ionicons name="location-outline" size={16} color={NM.lavenderDeep} />
+            }
+            <Text style={s.locationBtnText}>
+              {locationLoading ? 'Getting location…' : hasLocation ? 'Update my location' : 'Use my location'}
+            </Text>
+          </TouchableOpacity>
+          {hasLocation && !locationLoading && (
+            <View style={s.locationSetRow}>
+              <Ionicons name="checkmark-circle" size={14} color={NM.sage} />
+              <Text style={s.locationSetText}>Location saved</Text>
+            </View>
+          )}
+          {locationError && (
+            <Text style={s.locationError}>{locationError}</Text>
+          )}
+        </View>
+
+        {hasLocation && (
+          <>
+            <Text style={s.radiusLabel}>Search radius</Text>
+            <View style={s.chipRow}>
+              {RADIUS_OPTIONS.map((km) => {
+                const active = radiusKm === km;
+                return (
+                  <TouchableOpacity
+                    key={km}
+                    style={[s.chip, active && s.chipActive]}
+                    onPress={() => setFilters({ radiusKm: active ? 0 : km })}
+                    activeOpacity={0.75}
+                  >
+                    <Text style={[s.chipText, active && s.chipTextActive]}>{km} km</Text>
+                  </TouchableOpacity>
+                );
+              })}
+              {radiusKm > 0 && (
+                <TouchableOpacity
+                  style={s.chip}
+                  onPress={() => setFilters({ radiusKm: 0 })}
+                  activeOpacity={0.75}
+                >
+                  <Text style={s.chipText}>Any distance</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </>
+        )}
+
         <View style={{ marginTop: 32 }}>
           <NMBtn full onPress={() => router.back()}>
             {count > 0 ? `Apply ${count} filter${count > 1 ? 's' : ''}` : 'Apply filters'}
@@ -200,4 +298,20 @@ const s = StyleSheet.create({
   },
   toggleLabel: { fontSize: 15, color: NM.ink, fontWeight: '500', marginBottom: 2 },
   toggleSub: { fontSize: 12, color: NM.ink3, lineHeight: 17 },
+  locationCard: {
+    backgroundColor: '#fff', borderRadius: NM.r.lg, padding: 14,
+    gap: 8, ...NM.shadow.soft,
+  },
+  locationBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingVertical: 4,
+  },
+  locationBtnText: { fontSize: 15, color: NM.lavenderDeep, fontWeight: '600' },
+  locationSetRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  locationSetText: { fontSize: 12, color: NM.sage, fontWeight: '500' },
+  locationError: { fontSize: 12, color: NM.danger, lineHeight: 17 },
+  radiusLabel: {
+    fontSize: 12, color: NM.ink3, fontWeight: '500',
+    marginTop: 14, marginBottom: 8,
+  },
 });

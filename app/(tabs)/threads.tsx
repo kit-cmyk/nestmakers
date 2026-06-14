@@ -85,7 +85,8 @@ export default function Threads() {
       }));
 
       setThreads(rows);
-    } catch {
+    } catch (err) {
+      console.error('[threads] loadThreads error:', err);
       setError('Could not load conversations. Check your connection and try again.');
     } finally {
       setLoading(false);

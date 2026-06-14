@@ -13,12 +13,18 @@ import { useAuthStore } from '@/store/authStore';
 
 export default function CreateAccount() {
   const router = useRouter();
-  const { signUp, isLoading } = useAuthStore();
+  const { signUp, signInWithGoogle, isLoading } = useAuthStore();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState('');
+
+  const handleGoogleSignIn = async () => {
+    setError('');
+    const err = await signInWithGoogle();
+    if (err) setError(err);
+  };
 
   const handleCreate = async () => {
     if (!email.trim()) { setError('Please enter your email address.'); return; }
@@ -120,6 +126,7 @@ export default function CreateAccount() {
           ) : (
             <NMBtn full onPress={handleCreate}>Create account</NMBtn>
           )}
+
         </View>
 
         <TouchableOpacity onPress={() => router.push('/(onboarding)/sign-in')}>
@@ -157,4 +164,15 @@ const s = StyleSheet.create({
   errorText: { fontSize: 13, color: NM.danger, flex: 1 },
   signInText: { textAlign: 'center', fontSize: 14, color: NM.ink3 },
   signInBold: { color: NM.ink, fontWeight: '600' },
+  divider: { flexDirection: 'row', alignItems: 'center', gap: 10, marginVertical: 4 },
+  dividerLine: { flex: 1, height: 1, backgroundColor: NM.hair2 },
+  dividerText: { fontSize: 13, color: NM.ink3 },
+  googleBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#fff', borderRadius: NM.r.lg,
+    borderWidth: 1.5, borderColor: NM.hair2,
+    paddingHorizontal: 14, height: 52, gap: 10,
+    ...NM.shadow.soft,
+  },
+  googleBtnText: { fontSize: 16, color: NM.ink, fontWeight: '500' },
 });

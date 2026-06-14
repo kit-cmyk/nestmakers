@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity,
   StyleSheet, SafeAreaView, KeyboardAvoidingView,
-  Platform, ScrollView, ActivityIndicator,
+  Platform, ScrollView, ActivityIndicator, useWindowDimensions,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -13,11 +13,20 @@ import { useAuthStore } from '@/store/authStore';
 
 export default function SignIn() {
   const router = useRouter();
-  const { signIn, isLoading } = useAuthStore();
+  const { signIn, signInWithGoogle, isLoading } = useAuthStore();
+  const { width: screenW } = useWindowDimensions();
+  const lavenderSize = Math.round(screenW * 0.78);
+  const peachSize = Math.round(screenW * 0.88);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState('');
+
+  const handleGoogleSignIn = async () => {
+    setError('');
+    const err = await signInWithGoogle();
+    if (err) setError(err);
+  };
 
   const handleSignIn = async () => {
     if (!email.trim() || !password) {
@@ -34,9 +43,33 @@ export default function SignIn() {
       style={s.root}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      {/* Ambient blobs */}
-      <View style={[s.blob, { top: -80, left: -60, width: 260, height: 260, backgroundColor: NM.lavenderSoft }]} />
-      <View style={[s.blob, { bottom: 80, right: -80, width: 280, height: 280, backgroundColor: NM.peachSoft }]} />
+      {/* Ambient blobs — sized & offset relative to screen width so they sit consistently on any device */}
+      <View
+        pointerEvents="none"
+        style={[
+          s.blob,
+          {
+            top: -lavenderSize * 0.42,
+            left: -lavenderSize * 0.35,
+            width: lavenderSize,
+            height: lavenderSize,
+            backgroundColor: NM.lavenderSoft,
+          },
+        ]}
+      />
+      <View
+        pointerEvents="none"
+        style={[
+          s.blob,
+          {
+            bottom: -peachSize * 0.42,
+            right: -peachSize * 0.35,
+            width: peachSize,
+            height: peachSize,
+            backgroundColor: NM.peachSoft,
+          },
+        ]}
+      />
 
       <SafeAreaView>
         <NMHeader />
@@ -138,7 +171,7 @@ export default function SignIn() {
 
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: NM.cream },
-  blob: { position: 'absolute', borderRadius: 999, opacity: 0.8 },
+  blob: { position: 'absolute', borderRadius: 999, opacity: 0.45 },
   scroll: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 28, paddingBottom: 48, paddingTop: 16 },
   wordmark: { fontSize: 11, color: NM.ink3, letterSpacing: 2, textTransform: 'uppercase', marginBottom: 28 },
   title: { fontSize: 46, lineHeight: 50, color: NM.ink, letterSpacing: -1.2, fontWeight: '300', marginBottom: 10 },
@@ -163,4 +196,15 @@ const s = StyleSheet.create({
   forgotText: { fontSize: 14, color: NM.lavenderDeep, fontWeight: '600' },
   createText: { textAlign: 'center', fontSize: 14, color: NM.ink3 },
   createBold: { color: NM.ink, fontWeight: '600' },
+  divider: { flexDirection: 'row', alignItems: 'center', gap: 10, marginVertical: 4 },
+  dividerLine: { flex: 1, height: 1, backgroundColor: NM.hair2 },
+  dividerText: { fontSize: 13, color: NM.ink3 },
+  googleBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#fff', borderRadius: NM.r.lg,
+    borderWidth: 1.5, borderColor: NM.hair2,
+    paddingHorizontal: 14, height: 52, gap: 10,
+    ...NM.shadow.soft,
+  },
+  googleBtnText: { fontSize: 16, color: NM.ink, fontWeight: '500' },
 });

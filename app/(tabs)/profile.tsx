@@ -14,6 +14,7 @@ import { getFileExtension, getMimeType, uploadFileFromUri } from '@/lib/uploadFi
 import { supabase } from '@/lib/supabase';
 
 const SETTINGS = [
+  { label: 'Account Settings', icon: 'person-circle-outline', desc: 'Email, password, delete account', route: '/(screens)/account-settings' },
   { label: 'Preference Transparency', icon: 'eye-outline', desc: 'Control which fields are public', route: '/(screens)/preference-transparency' },
   { label: 'Deal-Breaker Filters', icon: 'funnel-outline', desc: 'Auto-decline incompatible requests', route: '/(screens)/deal-breakers' },
   { label: 'Take a Break Mode', icon: 'pause-circle-outline', desc: 'Pause without losing progress', route: '/(screens)/take-a-break' },

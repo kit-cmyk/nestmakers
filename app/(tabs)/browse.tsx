@@ -15,13 +15,8 @@ import { asPublicProfiles } from '@/lib/publicProfiles';
 import { useAuthStore } from '@/store/authStore';
 import { useBrowseFiltersStore } from '@/store/browseFiltersStore';
 import { useDealBreakersStore } from '@/store/dealBreakersStore';
-import { Profile, PublicProfile, INVOLVEMENT_LABELS, INSEM_LABELS } from '@/types/database';
+import { PublicProfile, INVOLVEMENT_LABELS, INSEM_LABELS } from '@/types/database';
 import { notifyNewLike } from '@/lib/notifications';
-import { usePremium } from '@/hooks/usePremium';
-import { usePremiumSheetStore } from '@/store/premiumSheetStore';
-
-const FREE_LIKE_LIMIT = 10;
-const FREE_VIEW_LIMIT = 15;
 
 const { width: SCREEN_W } = Dimensions.get('window');
 const SWIPE_THRESHOLD = SCREEN_W * 0.3;
@@ -32,12 +27,9 @@ export default function Browse() {
   const { session, profile: myProfile } = useAuthStore();
   const filters = useBrowseFiltersStore();
   const dealBreakers = useDealBreakersStore();
-  const isPremium = usePremium();
-  const showPremiumSheet = usePremiumSheetStore((s) => s.show);
   const pan = useRef(new Animated.ValueXY()).current;
   const [profiles, setProfiles] = useState<PublicProfile[]>([]);
   const [cardIndex, setCardIndex] = useState(0);
-  const [dailyLikes, setDailyLikes] = useState(0);
   const [lastAction, setLastAction] = useState<'like' | 'pass' | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -69,6 +61,7 @@ export default function Browse() {
       .toISOString().split('T')[0];
     const dobMin = new Date(now.getFullYear() - filters.ageMax, now.getMonth(), now.getDate())
       .toISOString().split('T')[0];
+    const useRadius = filters.radiusKm > 0 && myProfile?.latitude != null && myProfile?.longitude != null;
     return {
       p_user_id:       session.user.id,
       p_giver_types:   filters.giverTypes.length > 0        ? filters.giverTypes        : null,
@@ -81,13 +74,16 @@ export default function Browse() {
       p_blocked_inv:   dealBreakers.blockedInvolvementLevels.length > 0  ? dealBreakers.blockedInvolvementLevels  : null,
       p_require_age21: dealBreakers.requireAge21,
       p_same_country:  dealBreakers.sameCountryOnly,
+      p_lat:           useRadius ? myProfile!.latitude  : null,
+      p_lng:           useRadius ? myProfile!.longitude : null,
+      p_radius_km:     useRadius ? filters.radiusKm     : null,
       p_limit:         20,
       p_offset:        offset,
     };
-  }, [session, filters, dealBreakers]);
+  }, [session, myProfile, filters, dealBreakers]);
 
   const loadProfiles = useCallback(async () => {
-    if (!session?.user || !myProfile) return;
+    if (!session?.user) return;
     setLoading(true);
     setError(null);
     setFiltersBlocking(false);
@@ -96,21 +92,13 @@ export default function Browse() {
       const rpcParams = buildRpcParams(0);
       if (!rpcParams) return;
 
-      const [{ data, error: rpcError }, { count: likeCount }] = await Promise.all([
-        supabase.rpc('get_browse_profiles', rpcParams),
-        supabase
-          .from('likes')
-          .select('*', { count: 'exact', head: true })
-          .eq('from_user_id', session.user.id)
-          .gte('created_at', new Date(new Date().setHours(0, 0, 0, 0)).toISOString()),
-      ]);
+      const { data, error: rpcError } = await supabase.rpc('get_browse_profiles', rpcParams);
 
       if (rpcError) throw rpcError;
 
       const loaded = asPublicProfiles(data);
       setProfiles(loaded);
       setCardIndex(0);
-      setDailyLikes(likeCount ?? 0);
 
       if (loaded.length === 0 && filters.activeCount() > 0) {
         const { data: unfiltered } = await supabase.rpc('get_browse_profiles', {
@@ -119,15 +107,15 @@ export default function Browse() {
         });
         if (asPublicProfiles(unfiltered).length > 0) setFiltersBlocking(true);
       }
-    } catch {
-      setError('Could not load profiles. Check your connection and try again.');
+    } catch (err: any) {
+      setError(err?.message ?? 'Could not load profiles. Check your connection and try again.');
     } finally {
       setLoading(false);
     }
-  }, [session, myProfile, filters, dealBreakers, buildRpcParams]);
+  }, [session, filters, dealBreakers, buildRpcParams]);
 
   const loadMoreProfiles = useCallback(async (currentCount: number) => {
-    if (!session?.user || !myProfile || loadingMore) return;
+    if (!session?.user || loadingMore) return;
     setLoadingMore(true);
     try {
       const rpcParams = buildRpcParams(currentCount);
@@ -138,7 +126,7 @@ export default function Browse() {
     } finally {
       setLoadingMore(false);
     }
-  }, [session, myProfile, loadingMore, buildRpcParams]);
+  }, [session, loadingMore, buildRpcParams]);
 
   // Debounce filter/dealbreaker changes to avoid firing an RPC on every slider tick
   useEffect(() => {
@@ -172,10 +160,6 @@ export default function Browse() {
   };
 
   const flyOut = (direction: 'like' | 'pass') => {
-    if (direction === 'like' && !isPremium && dailyLikes >= FREE_LIKE_LIMIT) {
-      showPremiumSheet(`You've used your ${FREE_LIKE_LIMIT} free likes today. Upgrade for unlimited.`);
-      return;
-    }
     const toX = direction === 'like' ? SCREEN_W * 1.5 : -SCREEN_W * 1.5;
     const current = profiles[cardIndex];
     Animated.timing(pan, {
@@ -185,7 +169,6 @@ export default function Browse() {
     }).start(() => {
       if (direction === 'like' && current) {
         sendLike(current.id);
-        setDailyLikes((c) => c + 1);
       }
       if (direction === 'pass' && current) recordPass(current.id);
       setLastAction(direction);
@@ -244,12 +227,12 @@ export default function Browse() {
     filters.insemPrefs.length > 0 && 'insemination preference',
     filters.involvementLevels.length > 0 && 'involvement level',
     (filters.ageMin !== 18 || filters.ageMax !== 45) && 'age range',
+    filters.radiusKm > 0 && `${filters.radiusKm}km radius`,
   ].filter(Boolean) as string[];
 
   const header = (
     <View style={[s.headerRow, { paddingTop: insets.top + 8 }]}>
       <Text style={s.headerTitle}>Browse {myProfile?.role === 'seeker' ? 'Givers' : 'Seekers'}</Text>
-      <Text style={s.headerSub}>Intentional · one at a time</Text>
       <TouchableOpacity style={s.filterBtn} onPress={() => router.push('/(screens)/browse-filters')}>
         <Ionicons name="options-outline" size={18} color={NM.ink2} />
         <Text style={s.filterText}>Filters</Text>
@@ -290,31 +273,6 @@ export default function Browse() {
           <TouchableOpacity style={s.undoBtn} onPress={loadProfiles}>
             <Ionicons name="refresh-outline" size={16} color={NM.lavenderDeep} />
             <Text style={s.undoText}>Try again</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  }
-
-  // Daily browse limit for free users
-  if (!isPremium && !isDeckEmpty && cardIndex >= FREE_VIEW_LIMIT) {
-    return (
-      <View style={s.root}>
-        {header}
-        <View style={s.emptyState}>
-          <View style={s.emptyIcon}>
-            <Ionicons name="lock-closed-outline" size={28} color={NM.lavenderDeep} />
-          </View>
-          <Text style={s.emptyTitle}>Daily limit reached</Text>
-          <Text style={s.emptySub}>
-            You've viewed {FREE_VIEW_LIMIT} profiles today. Upgrade for unlimited browsing, or check back tomorrow.
-          </Text>
-          <TouchableOpacity
-            style={s.undoBtn}
-            onPress={() => showPremiumSheet(`You've viewed ${FREE_VIEW_LIMIT} profiles today. Upgrade for unlimited.`)}
-          >
-            <Ionicons name="arrow-up-circle-outline" size={16} color={NM.lavenderDeep} />
-            <Text style={s.undoText}>Upgrade to Premium</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -365,6 +323,15 @@ export default function Browse() {
                 >
                   <Ionicons name="close-circle" size={14} color={NM.lavenderDeep} />
                   <Text style={s.suggestionText}>Clear insemination filter</Text>
+                </TouchableOpacity>
+              )}
+              {filters.radiusKm > 0 && (
+                <TouchableOpacity
+                  style={s.suggestionChip}
+                  onPress={() => { filters.setFilters({ radiusKm: 0 }); loadProfiles(); }}
+                >
+                  <Ionicons name="close-circle" size={14} color={NM.lavenderDeep} />
+                  <Text style={s.suggestionText}>Clear distance filter</Text>
                 </TouchableOpacity>
               )}
             </View>

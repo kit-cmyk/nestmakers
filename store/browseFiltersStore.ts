@@ -8,6 +8,7 @@ export interface BrowseFilters {
   ageMin: number;
   ageMax: number;
   verifiedOnly: boolean;
+  radiusKm: number; // 0 = any distance (filter off)
 }
 
 const DEFAULTS: BrowseFilters = {
@@ -17,6 +18,7 @@ const DEFAULTS: BrowseFilters = {
   ageMin: 18,
   ageMax: 45,
   verifiedOnly: false,
+  radiusKm: 0,
 };
 
 interface BrowseFiltersState extends BrowseFilters {
@@ -39,7 +41,8 @@ export const useBrowseFiltersStore = create<BrowseFiltersState>((set, get) => ({
       s.insemPrefs.length +
       s.involvementLevels.length +
       (s.ageMin !== DEFAULTS.ageMin || s.ageMax !== DEFAULTS.ageMax ? 1 : 0) +
-      (s.verifiedOnly ? 1 : 0)
+      (s.verifiedOnly ? 1 : 0) +
+      (s.radiusKm > 0 ? 1 : 0)
     );
   },
 }));

@@ -31,7 +31,9 @@ export default function ForgotPassword() {
     }
     setError('');
     setLoading(true);
-    await supabase.auth.resetPasswordForEmail(trimmed.toLowerCase());
+    await supabase.auth.resetPasswordForEmail(trimmed.toLowerCase(), {
+      redirectTo: 'nestmakers://reset-password',
+    });
     setLoading(false);
     setStep('sent');
   };
@@ -114,9 +116,11 @@ export default function ForgotPassword() {
               ) : null}
             </View>
 
-            <NMBtn full onPress={handleSend}>
-              Send reset link
-            </NMBtn>
+            {loading ? (
+              <ActivityIndicator color={NM.ink} style={{ marginTop: 8 }} />
+            ) : (
+              <NMBtn full onPress={handleSend}>Send reset link</NMBtn>
+            )}
           </View>
 
           <View style={s.notice}>
